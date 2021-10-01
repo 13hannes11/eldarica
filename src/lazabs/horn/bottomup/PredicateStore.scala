@@ -52,6 +52,7 @@ class PredicateStore[CC <% HornClauses.ConstraintClause]
   var implicationChecksNegTime : Long = 0
   var implicationChecksSetup = 0
   var implicationChecksSetupTime : Long = 0
+  var implicationChecksFilterTime : Long = 0
 
   var matchCount = 0
   var matchTime : Long = 0  

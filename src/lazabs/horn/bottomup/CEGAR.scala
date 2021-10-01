@@ -272,6 +272,7 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
     println("Number of implication checks (positive):               " + implicationChecksPos)
     println("Number of implication checks (negative):               " + implicationChecksNeg)
     println("Time for implication checks (setup, ms):               " + implicationChecksSetupTime)
+    println("Time for implication checks (filter, ms):              " + implicationChecksFilterTime)
     println("Time for implication checks (positive, ms):            " + implicationChecksPosTime)
     println("Time for implication checks (negative, ms):            " + implicationChecksNegTime)
 
@@ -834,12 +835,18 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
     val reducer = sf reducer assumptions
     implicationChecksSetupTime =
       implicationChecksSetupTime + (System.currentTimeMillis - startTime)
-    
-    val predConsequences =
-      (for (pred <- predicates(rs).iterator;
+
+    val startTimeFilter = System.currentTimeMillis
+
+    val predConsequences = predicates(rs).par.iterator.filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) }).toVector
+    //val predConsequences = predicates(rs).iterator.filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) }).toVector
+    /*val predConsequences =
+      (for (pred <- (predicates(rs).iterator);
             if predIsConsequenceWithHasher(pred, rsOcc,
                                            reducer, prover, order))
-       yield pred).toVector
+       yield pred).toVector*/
+
+    implicationChecksFilterTime = implicationChecksFilterTime + (System.currentTimeMillis - startTimeFilter)
     AbstractState(rs, predConsequences)
   }
   
