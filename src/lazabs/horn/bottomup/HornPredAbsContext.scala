@@ -65,7 +65,7 @@ class HornPredAbsContext[CC <% HornClauses.ConstraintClause]
   val plugins =
     for (t <- theories; p <- t.plugin.toSeq) yield p
 
-  val useHashing =
+  val useHashing = lazabs.GlobalParameters.get.hashing &&
     (theories forall {
        case ap.types.TypeTheory                 => true
        case ap.theories.GroebnerMultiplication  => true

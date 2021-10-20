@@ -127,6 +127,7 @@ class GlobalParameters extends Cloneable {
   var timeoutChecker : () => Unit = () => ()
   var parallelImplications = false
   var parallelImplicationsMinCount = 2
+  var hashing = true
 
   def needFullSolution = assertions || displaySolutionProlog || displaySolutionSMT
   def needFullCEX = assertions || plainCEX || !pngNo
@@ -351,9 +352,13 @@ object Main {
         templateBasedInterpolation = false
         arguments(rest)
       }
-      case "-parallelImplications" :: rest => {
+      case "-hashing:off" :: rest => {
+        hashing = false
+        arguments(rest)
+      } case "-parallelImplications" :: rest => {
         templateBasedInterpolation = false // turn -abstract:off
         parallelImplications = true
+        hashing = false
         arguments(rest)
       }
       case parallel_implications_count :: rest if (parallel_implications_count startsWith "-parallelImplicationsMinCount:") => {
