@@ -125,6 +125,8 @@ class GlobalParameters extends Cloneable {
   var verifyInterpolants = false
   var minePredicates = false
   var timeoutChecker : () => Unit = () => ()
+  var parallelImplications = false
+  var parallelImplicationsMinCount = 2
 
   def needFullSolution = assertions || displaySolutionProlog || displaySolutionSMT
   def needFullCEX = assertions || plainCEX || !pngNo
@@ -349,6 +351,16 @@ object Main {
         templateBasedInterpolation = false
         arguments(rest)
       }
+      case "-parallelImplications" :: rest => {
+        templateBasedInterpolation = false // turn -abstract:off
+        parallelImplications = true
+        arguments(rest)
+      }
+      case parallel_implications_count :: rest if (parallel_implications_count startsWith "-parallelImplicationsMinCount:") => {
+        parallelImplicationsMinCount = (parallel_implications_count drop 30).toInt
+        arguments(rest)
+      }
+
       case tTimeout :: rest if (tTimeout.startsWith("-abstractTO:")) =>
         templateBasedInterpolationTimeout =
           (java.lang.Float.parseFloat(tTimeout.drop(12)) * 1000).toInt;

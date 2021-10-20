@@ -31,19 +31,17 @@ package lazabs.horn.bottomup
 
 import ap.PresburgerTools
 import ap.parser._
-import ap.terfor.{TermOrder, TerForConvenience}
-import ap.terfor.conjunctions.Conjunction
+import ap.terfor.{TerForConvenience, TermOrder}
+import ap.terfor.conjunctions.{Conjunction, ReduceWithConjunction}
 import ap.terfor.preds.Predicate
 import ap.terfor.substitutions.ConstantSubst
 import ap.proof.ModelSearchProver
 import ap.util.Seqs
-
 import Util._
-import DisjInterpolator.{AndOrNode, AndNode, OrNode}
+import DisjInterpolator.{AndNode, AndOrNode, OrNode}
 
-import scala.collection.mutable.{LinkedHashSet, LinkedHashMap, ArrayBuffer,
-                                 HashSet => MHashSet, HashMap => MHashMap,
-                                 ArrayStack}
+import scala.collection.mutable.{ArrayBuffer, ArrayStack, LinkedHashMap, LinkedHashSet, HashMap => MHashMap, HashSet => MHashSet}
+import scala.collection.parallel.immutable.ParVector
 import scala.util.Sorting
 
 object CEGAR {
@@ -838,18 +836,26 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
 
     val startTimeFilter = System.currentTimeMillis
 
-    val predConsequences = predicates(rs).par.iterator.filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) }).toVector
-    //val predConsequences = predicates(rs).iterator.filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) }).toVector
-    /*val predConsequences =
-      (for (pred <- (predicates(rs).iterator);
-            if predIsConsequenceWithHasher(pred, rsOcc,
-                                           reducer, prover, order))
-       yield pred).toVector*/
+    var pred = predicates(rs)
+    val predConsequences = if (pred.size >= lazabs.GlobalParameters.get.parallelImplicationsMinCount
+        && lazabs.GlobalParameters.get.parallelImplications) {
+      predicates(rs)
+        .par
+        .filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) })
+        .toVector
+    } else {
+      predicates(rs)
+        .iterator
+        .filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) })
+        .toVector
+    }
+
+
 
     implicationChecksFilterTime = implicationChecksFilterTime + (System.currentTimeMillis - startTimeFilter)
     AbstractState(rs, predConsequences)
   }
-  
+
   //////////////////////////////////////////////////////////////////////////////
   
   def extractCounterexample(from : Seq[AbstractState], clause : NormClause)
