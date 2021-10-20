@@ -270,7 +270,7 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
     println("Number of implication checks (positive):               " + implicationChecksPos)
     println("Number of implication checks (negative):               " + implicationChecksNeg)
     println("Time for implication checks (setup, ms):               " + implicationChecksSetupTime)
-    println("Time for implication checks (filter, ms):              " + implicationChecksFilterTime)
+    println("Time for implication checks (filter, ms):              " + (implicationChecksFilterTime / 1000000))
     println("Time for implication checks (positive, ms):            " + implicationChecksPosTime)
     println("Time for implication checks (negative, ms):            " + implicationChecksNegTime)
 
@@ -834,9 +834,13 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
     implicationChecksSetupTime =
       implicationChecksSetupTime + (System.currentTimeMillis - startTime)
 
-    val startTimeFilter = System.currentTimeMillis
+    val startTimeFilter = System.nanoTime()
 
     var pred = predicates(rs)
+
+    if (lazabs.GlobalParameters.get.logStat) {
+      println("genAbstractState pred count: " + pred.size)
+    }
     val predConsequences = if (pred.size >= lazabs.GlobalParameters.get.parallelImplicationsMinCount
         && lazabs.GlobalParameters.get.parallelImplications) {
       predicates(rs)
@@ -850,9 +854,10 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
         .toVector
     }
 
+    val interval = System.nanoTime() - startTimeFilter
+    println("genAbstractState pred time (ns): " + interval)
 
-
-    implicationChecksFilterTime = implicationChecksFilterTime + (System.currentTimeMillis - startTimeFilter)
+    implicationChecksFilterTime = implicationChecksFilterTime + interval
     AbstractState(rs, predConsequences)
   }
 
