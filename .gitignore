@@ -1,2 +1,5 @@
 target
 build.properties
+.idea
+.bsp
+benchmark-files
