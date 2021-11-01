@@ -1,0 +1,9 @@
+#!/bin/bash
+
+HERE=`dirname $0`
+input="$1"
+output="$2/$(basename $1 smt2)out"
+
+"$HERE"/../eld -parallelImplications -parallelImplicationsMinCount:2 "$input" >"$output" 2>/dev/null
+cat "$output"
+
