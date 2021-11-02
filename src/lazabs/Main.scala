@@ -358,7 +358,7 @@ object Main {
       } case "-parallelImplications" :: rest => {
         templateBasedInterpolation = false // turn -abstract:off
         parallelImplications = true
-        hashing = false
+        hashing = true
         arguments(rest)
       }
       case parallel_implications_count :: rest if (parallel_implications_count startsWith "-parallelImplicationsMinCount:") => {

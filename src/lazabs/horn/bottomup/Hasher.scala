@@ -162,7 +162,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
   private val models          = new ArrayBuffer[Model]
   private val reducers        = new ArrayBuffer[ReduceWithConjunction]
 
-  {
+  this.synchronized{
     // set up some default models
     import TerForConvenience._
 
@@ -202,9 +202,9 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
 
   var evalTime : Long = 0
   var evalNum : Int = 0
-  def modelNum = models.size
+  def modelNum = this.synchronized{ models.size}
 
-  private def eval(modelIndex : Int, f : Conjunction) : Boolean = {
+  private def eval(modelIndex : Int, f : Conjunction) : Boolean = this.synchronized{
     import TerForConvenience._
 
     val startTime = System.currentTimeMillis
@@ -220,7 +220,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
   }
 
   private def mergeModels(modelIndex : Int,
-                          model2 : Model) : Option[Model] = {
+                          model2 : Model) : Option[Model] = this.synchronized{
     import TerForConvenience._
     if ((reducers(modelIndex) tentativeReduce model2).isFalse) {
       None
@@ -242,7 +242,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
    * Make the hasher watch the given formula. The formula can be referred
    * to using the returned id.
    */
-  def addFormula(f : Conjunction) : Int =
+  def addFormula(f : Conjunction) : Int = this.synchronized {
     formula2Id.getOrElseUpdate(f, {
       val res = watchedFormulas.size
       watchedFormulas += f
@@ -253,15 +253,15 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
           evalVector += i
       evalVectors += evalVector
 
-//    println("Adding " + f + ": " + evalVector)
+      //    println("Adding " + f + ": " + evalVector)
 
       res
     })
-
+  }
   /**
    * Add a new model that is subsequently used for hashing.
    */
-  def addModel(model : Model) : Unit = {
+  def addModel(model : Model) : Unit = this.synchronized{
 //    println("Adding model ...")
     var i = presetModelNum
     var finished = false
@@ -291,11 +291,11 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
     updateAssertionStack(i)
   }
 
-  def acceptsModels : Boolean = models.size < maxModelNum
+  def acceptsModels : Boolean = this.synchronized{ models.size < maxModelNum }
 
   //////////////////////////////////////////////////////////////////////////////
 
-  private def extendEvalVectors(modelIndex : Int) : Unit = {
+  private def extendEvalVectors(modelIndex : Int) : Unit = this.synchronized{
     val model = models(modelIndex)
     val assignedConstants = model.constants
 
@@ -317,7 +317,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
 
   private def extendModelAndUpdateVectors
                          (modelIndex : Int,
-                          changedConstants : Set[ConstantTerm]) : Unit = {
+                          changedConstants : Set[ConstantTerm]) : Unit = this.synchronized{
       val model = models(modelIndex)
 
       // update the stored vectors
@@ -330,7 +330,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
       }
     }
 
-  private def updateAssertionStack(modelIndex : Int) : Unit = {
+  private def updateAssertionStack(modelIndex : Int) : Unit = this.synchronized{
     var newBit = true
     for (el <- assertionStack) el match {
       case AssertedFormula(id) =>
@@ -346,7 +346,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
 
   def isActive : Boolean = true
 
-  def printStatistics : Unit = {
+  def printStatistics : Unit = this.synchronized{
     println("Number of models in hasher:                            " + modelNum)
     println("Number of hasher evals:                                " + evalNum)
     println("Time for hasher eval:                                  " + evalTime)
@@ -357,8 +357,8 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
   // API for checking satisfaction and implications
 
   def push : Unit =
-    assertionStack += AssertionFrame(currentEvalVector)
-  def pop : Unit = {
+    this.synchronized{ assertionStack += AssertionFrame(currentEvalVector)}
+  def pop : Unit = this.synchronized{
     var i = assertionStack.size - 1
     while (i >= 0) {
       assertionStack(i) match {
@@ -374,7 +374,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
     }
   }
 
-  def scope[A](comp : => A) : A = {
+  def scope[A](comp : => A) : A = this.synchronized{
     push
     try {
       comp
@@ -383,7 +383,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
     }
   }
 
-  def assertFormula(forId : Int) : Unit = {
+  def assertFormula(forId : Int) : Unit = this.synchronized{
     assertionStack += AssertedFormula(forId)
     if (currentEvalVector == null)
       currentEvalVector = evalVectors(forId)
@@ -392,12 +392,12 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
   }
 
   def isSat : Boolean =
-    currentEvalVector == null || !currentEvalVector.isEmpty
+    this.synchronized{currentEvalVector == null || !currentEvalVector.isEmpty}
 
-  def mightBeImplied(forId : Int) : Boolean =
+  def mightBeImplied(forId : Int) : Boolean = this.synchronized {
     currentEvalVector != null &&
-    (currentEvalVector subsetOf evalVectors(forId))
-
+      (currentEvalVector subsetOf evalVectors(forId))
+  }
   private var currentEvalVector : MBitSet = null
   private val assertionStack = new ArrayBuffer[AssertionStackElement]
 
