@@ -291,6 +291,7 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
               hasherChecksHit + "/" + hasherChecksMiss + " (" +
               hasherChecksRate + "%)")
     }
+    println(ap.util.Timer.toString())
 
 /*    println
     println("Number of subsumed abstract states:            " +
@@ -505,12 +506,13 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
   }
 
   //////////////////////////////////////////////////////////////////////////////
-
+//LOOK AT
   def matchClauseSimple(fixedState : AbstractState,
                         initialAssumptions : Conjunction,
                         clause : NormClause,
                         fixedIndex : Int, occ : Int,
                         byStates : Array[Seq[AbstractState]]) : Unit = {
+    ap.util.Timer.measure("matchClauseSimple"){
     import TerForConvenience._
     implicit val _ = clause.order
 
@@ -535,7 +537,8 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
 
     findPreStates(body.size - 1, List(), initialAssumptions)
   }
-
+//  print(timer)
+}
   //////////////////////////////////////////////////////////////////////////////
 
   def matchClausePrereduce(state : AbstractState,
@@ -543,6 +546,7 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
                            clause : NormClause,
                            fixedIndex : Int, occ : Int,
                            byStates : Array[Seq[AbstractState]]) : Unit = {
+    ap.util.Timer.measure("matchClausePrereduce"){
     import TerForConvenience._
     implicit val _ = clause.order
 
@@ -560,26 +564,26 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
     var foundInconsistency = false
     val availableStates =
       (for (((rs, occ), i) <- relevantRS.iterator; if (!foundInconsistency)) yield {
-         val states =
-           (for (s <- byStates(i).iterator;
-                 simp = preReducer(s predConjunction occ);
-                 if (!simp.isFalse)) yield (s, simp)).toArray
-         if (states.isEmpty) {
-           foundInconsistency = true
-         } else if (states.size == 1) {
-           currentAssumptions = sf reduce conj(List(currentAssumptions, states(0)._2))
-           if (currentAssumptions.isFalse)
-             foundInconsistency = true
-           else
-             preReducer = sf reducer currentAssumptions
-         }
-         (states, i)
-       }).toArray
+        val states =
+          (for (s <- byStates(i).iterator;
+                simp = preReducer(s predConjunction occ);
+                if (!simp.isFalse)) yield (s, simp)).toArray
+        if (states.isEmpty) {
+          foundInconsistency = true
+        } else if (states.size == 1) {
+          currentAssumptions = sf reduce conj(List(currentAssumptions, states(0)._2))
+          if (currentAssumptions.isFalse)
+            foundInconsistency = true
+          else
+            preReducer = sf reducer currentAssumptions
+        }
+        (states, i)
+      }).toArray
 
     if (foundInconsistency)
       return
 
-/*
+    /*
     {
       val tableSize = body.size
       val statesTable =
@@ -625,15 +629,15 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
 */
 
     Sorting.stableSort(availableStates,
-                       (x : (Array[(AbstractState, Conjunction)], Int)) => x._1.size)
+      (x: (Array[(AbstractState, Conjunction)], Int)) => x._1.size)
 
     val chosenStates = Array.ofDim[AbstractState](clause.body.size)
     chosenStates(fixedIndex) = state
 
     val N = availableStates.size
 
-    def findPreStates(i : Int,
-                      assumptions : Conjunction) : Unit =
+    def findPreStates(i: Int,
+                      assumptions: Conjunction): Unit =
       if (i == N) {
         val cs = chosenStates.toList
         nextToProcess.enqueue(cs, clause, assumptions)
@@ -654,9 +658,9 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
           }
         }
       }
-    
-    findPreStates(0, currentAssumptions)
 
+    findPreStates(0, currentAssumptions)
+  }
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -829,36 +833,42 @@ class CEGAR[CC <% HornClauses.ConstraintClause]
                        rs : RelationSymbol, rsOcc : Int,
                        prover : => ModelSearchProver.IncProver,
                        order : TermOrder) : AbstractState = {
-    val startTime = System.currentTimeMillis
-    val reducer = sf reducer assumptions
-    implicationChecksSetupTime =
-      implicationChecksSetupTime + (System.currentTimeMillis - startTime)
+    ap.util.Timer.measure("genAbstractState") {
+      val startTime = System.currentTimeMillis
+      val reducer = sf reducer assumptions
+      implicationChecksSetupTime =
+        implicationChecksSetupTime + (System.currentTimeMillis - startTime)
 
-    val startTimeFilter = System.nanoTime()
+      val startTimeFilter = System.nanoTime()
 
-    var pred = predicates(rs)
+      var pred = predicates(rs)
 
-    if (lazabs.GlobalParameters.get.logStat) {
-      println("genAbstractState pred count: " + pred.size)
-    }
-    val predConsequences = if (pred.size >= lazabs.GlobalParameters.get.parallelImplicationsMinCount
+      if (lazabs.GlobalParameters.get.logStat) {
+        println("genAbstractState pred count: " + pred.size)
+      }
+      val predConsequences = if (pred.size >= lazabs.GlobalParameters.get.parallelImplicationsMinCount
         && lazabs.GlobalParameters.get.parallelImplications) {
-      predicates(rs)
-        .par
-        .filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) })
-        .toVector
-    } else {
-      predicates(rs)
-        .iterator
-        .filter(pred => { predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order) })
-        .toVector
+        predicates(rs)
+          .par
+          .filter(pred => {
+            predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order)
+          })
+          .toVector
+      } else {
+        predicates(rs)
+          .iterator
+          .filter(pred => {
+            predIsConsequenceWithHasher(pred, rsOcc, reducer, prover, order)
+          })
+          .toVector
+      }
+
+      val interval = System.nanoTime() - startTimeFilter
+      //println("genAbstractState pred time (ns): " + interval)
+
+      implicationChecksFilterTime = implicationChecksFilterTime + interval
+      AbstractState(rs, predConsequences)
     }
-
-    val interval = System.nanoTime() - startTimeFilter
-    println("genAbstractState pred time (ns): " + interval)
-
-    implicationChecksFilterTime = implicationChecksFilterTime + interval
-    AbstractState(rs, predConsequences)
   }
 
   //////////////////////////////////////////////////////////////////////////////

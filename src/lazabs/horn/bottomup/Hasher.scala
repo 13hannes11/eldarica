@@ -101,7 +101,24 @@ object Hasher {
   private val maxModelNum = 1024
 
 }
+object ParHasher{
 
+  private abstract sealed class AssertionStackElement
+
+  private case class AssertedFormula(id : Int)
+    extends AssertionStackElement
+  private case class AssertionFrame(oldVector : MBitSet)
+    extends AssertionStackElement
+
+  private def setBit(set : MBitSet, index : Int, value : Boolean) : Unit =
+    if (value)
+      set += index
+    else
+      set -= index
+
+  private val maxModelNum = 1024
+
+}
 ////////////////////////////////////////////////////////////////////////////////
 
 object InactiveHasher extends IHasher {
@@ -249,31 +266,34 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
    * Make the hasher watch the given formula. The formula can be referred
    * to using the returned id.
    */
-  def addFormula(f : Conjunction) : Int = this.synchronized {
-    //println("locked addFormula by thread "+ Thread.currentThread.getId())
-    val ret = formula2Id.getOrElseUpdate(f, {
-      val res = watchedFormulas.size
-      watchedFormulas += f
+  def addFormula(f : Conjunction) : Int = this.synchronized{
+    ap.util.Timer.measure("addFormula") {
+      //println("locked addFormula by thread "+ Thread.currentThread.getId())
+      val ret = formula2Id.getOrElseUpdate(f, {
+        val res = watchedFormulas.size
+        watchedFormulas += f
 
-      val evalVector = new MBitSet
-      for (i <- 0 until models.size)
-        if (eval(i, f))
-          evalVector += i
-      evalVectors += evalVector
+        val evalVector = new MBitSet
+        for (i <- (0 until models.size))
+          if (eval(i, f))
+            evalVector += i
+        evalVectors += evalVector
 
-      //    println("Adding " + f + ": " + evalVector)
+        //    println("Adding " + f + ": " + evalVector)
 
-      res
-    })
-    //println("unlocked addFormula by thread "+ Thread.currentThread.getId())
-    ret
+        res
+      })
+      //println("unlocked addFormula by thread "+ Thread.currentThread.getId())
+      ret
+    }
   }
   /**
    * Add a new model that is subsequently used for hashing.
    */
-  def addModel(model : Model) : Unit = this.synchronized{
+  def addModel(model : Model) : Unit = this.synchronized {
     //println("locked addModel by thread "+ Thread.currentThread.getId())
-//    println("Adding model ...")
+    //    println("Adding model ...")
+    ap.util.Timer.measure("addModel"){
     var i = presetModelNum
     var finished = false
 
@@ -283,7 +303,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
           val changedConstants = model.constants filterNot models(i).constants
           models(i) = mergedModel
           reducers(i) = ReduceWithConjunction(mergedModel, globalOrder, reducerSettings)
-//    println("Merged with #" + i)
+          //    println("Merged with #" + i)
           extendModelAndUpdateVectors(i, changedConstants)
           finished = true
         }
@@ -296,11 +316,12 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
       models += model
       reducers += ReduceWithConjunction(model, globalOrder, reducerSettings)
       extendEvalVectors(i)
-//println("now have " + models.size + " models")
+      //println("now have " + models.size + " models")
 
     }
 
     updateAssertionStack(i)
+  }
     //println("unlocked addModel by thread "+ Thread.currentThread.getId())
   }
 
@@ -318,6 +339,7 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
     val assignedConstants = model.constants
 
     // update the stored vectors
+    //make parallel
     for (formulaIndex <- 0 until watchedFormulas.size) {
       val formula = watchedFormulas(formulaIndex)
       val vector = evalVectors(formulaIndex)
@@ -440,3 +462,366 @@ class Hasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
   private val assertionStack = new ArrayBuffer[AssertionStackElement]
 
 }
+
+
+class ParHasher(globalOrder : TermOrder, reducerSettings : ReducerSettings)
+  extends IHasher {
+
+  import ParHasher._
+  import IHasher._
+  private implicit val _globalOrder = globalOrder
+
+  private val watchedFormulas = new ArrayBuffer[Conjunction]
+  private val evalVectors     = new ArrayBuffer[MBitSet]
+
+  private val formula2Id      = new MHashMap[Conjunction, Int]
+
+  private val models          = new ArrayBuffer[Model]
+  private val reducers        = new ArrayBuffer[ReduceWithConjunction]
+
+  this.synchronized{
+    //println("locked block by thread "+ Thread.currentThread.getId())
+    // set up some default models
+    import TerForConvenience._
+
+    // all variables 0
+    models +=
+      (for (c <- globalOrder.orderedConstants.toSeq;
+            sort = Sort sortOf c;
+            constr = sort membershipConstraint LinearCombination.ZERO;
+            if !constr.isFalse)
+      yield c) === 0
+
+    // all variables distinct, increasing
+    models +=
+      conj(for ((c, n) <- globalOrder.orderedConstants.iterator.zipWithIndex;
+                sort = Sort sortOf c;
+                value = l(n+1);
+                constr = sort membershipConstraint value;
+                if !constr.isFalse)
+      yield (c === value))
+
+    // all variables distinct, decreasing
+    models +=
+      conj(for ((c, n) <- globalOrder.orderedConstants.iterator.zipWithIndex;
+                sort = Sort sortOf c;
+                value = l(-(n+1));
+                constr = sort membershipConstraint value;
+                if !constr.isFalse)
+      yield (c === value))
+
+    for (m <- models)
+      reducers += ReduceWithConjunction(m, globalOrder, reducerSettings)
+    //println("unlocked block by thread "+ Thread.currentThread.getId())
+  }
+
+  private val presetModelNum = models.size
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  var evalTime : Long = 0
+  var evalNum : Int = 0
+  def modelNum = this.synchronized{ models.size}
+
+  private def eval(modelIndex : Int, f : Conjunction) : Boolean = this.synchronized{
+    //println("locked eval by thread "+ Thread.currentThread.getId())
+    import TerForConvenience._
+
+    val startTime = System.currentTimeMillis
+
+    val reduced1 = reducers(modelIndex) tentativeReduce f
+    val reduced2 = reducers(0) tentativeReduce reduced1
+    val res = reduced2.isTrue
+
+    evalTime = evalTime + (System.currentTimeMillis - startTime)
+    evalNum = evalNum + 1
+
+    //println("unlocked eval by thread "+ Thread.currentThread.getId())
+    res
+  }
+
+  private def mergeModels(modelIndex : Int,
+                          model2 : Model) : Option[Model] = this.synchronized{
+    //println("locked mergeModels by thread "+ Thread.currentThread.getId())
+    import TerForConvenience._
+    val ret = if ((reducers(modelIndex) tentativeReduce model2).isFalse) {
+      None
+    } else {
+      val res = models(modelIndex) & model2
+      val res2 =
+        if (res.predicates.isEmpty)
+          res
+        else
+          ReduceWithConjunction(Conjunction.TRUE, globalOrder,
+            reducerSettings)(res)
+      if (res2.isFalse) None else Some(res2)
+    }
+    //println("unlocked mergeModels by thread "+ Thread.currentThread.getId())
+    ret
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  /**
+   * Make the hasher watch the given formula. The formula can be referred
+   * to using the returned id.
+   */
+  def addFormula(f : Conjunction) : Int = this.synchronized {
+    //println("locked addFormula by thread "+ Thread.currentThread.getId())
+    val ret = formula2Id.getOrElseUpdate(f, {
+      val res = watchedFormulas.size
+      watchedFormulas += f
+
+      val evalVector = new MBitSet
+      evalVector ++= (0 until models.size).par.filter(eval(_,f)).iterator
+      evalVectors += evalVector
+
+      //    println("Adding " + f + ": " + evalVector)
+
+      res
+    })
+    //println("unlocked addFormula by thread "+ Thread.currentThread.getId())
+    ret
+  }
+  /**
+   * Add a new model that is subsequently used for hashing.
+   */
+  def addModel(model : Model) : Unit = this.synchronized{
+    //println("locked addModel by thread "+ Thread.currentThread.getId())
+    //    println("Adding model ...")
+    var i = presetModelNum
+    var finished = false
+
+    while (i < models.size && !finished)
+      mergeModels(i, model) match {
+        case Some(mergedModel) => {
+          val changedConstants = model.constants filterNot models(i).constants
+          models(i) = mergedModel
+          reducers(i) = ReduceWithConjunction(mergedModel, globalOrder, reducerSettings)
+          //    println("Merged with #" + i)
+          extendModelAndUpdateVectors(i, changedConstants)
+          finished = true
+        }
+        case None =>
+          i = i + 1
+      }
+
+    if (!finished) {
+      i = models.size
+      models += model
+      reducers += ReduceWithConjunction(model, globalOrder, reducerSettings)
+      extendEvalVectors(i)
+      //println("now have " + models.size + " models")
+
+    }
+
+    updateAssertionStack(i)
+    //println("unlocked addModel by thread "+ Thread.currentThread.getId())
+  }
+
+  def acceptsModels : Boolean = this.synchronized{ //println("locked acceptsModels by thread "+ Thread.currentThread.getId())
+    val ret = models.size < maxModelNum
+    //println("unlocked acceptsModels by thread "+ Thread.currentThread.getId())
+    ret
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  private def extendEvalVectors(modelIndex : Int) : Unit = this.synchronized {
+    //println("locked extendEvalVectors by thread "+ Thread.currentThread.getId())
+    ap.util.Timer.measure("extendEvalVectors"){
+    val model = models(modelIndex)
+    val assignedConstants = model.constants
+
+    // update the stored vectors
+    for (formulaIndex <- 0 until watchedFormulas.size) {
+      val formula = watchedFormulas(formulaIndex)
+      val vector = evalVectors(formulaIndex)
+
+      val newBit =
+        if (Seqs.disjoint(formula.constants, assignedConstants))
+        // use existing model where all constants are assigned 0
+          vector(0)
+        else
+          eval(modelIndex, formula)
+
+      setBit(vector, modelIndex, newBit)
+    }
+  }
+    //println("unlocked extendEvalVectors by thread "+ Thread.currentThread.getId())
+  }
+
+  private def extendModelAndUpdateVectors
+  (modelIndex : Int,
+   changedConstants : Set[ConstantTerm]) : Unit = this.synchronized{
+    //println("locked extendModelAndUpdateVectors by thread "+ Thread.currentThread.getId())
+    val model = models(modelIndex)
+
+    // update the stored vectors
+    for (formulaIndex <- 0 until watchedFormulas.size) {
+      val formula = watchedFormulas(formulaIndex)
+      if (!Seqs.disjoint(formula.constants, changedConstants)) {
+        val newBit = eval(modelIndex, formula)
+        setBit(evalVectors(formulaIndex), modelIndex, newBit)
+      }
+    }
+    //println("unlocked extendModelAndUpdateVectors by thread "+ Thread.currentThread.getId())
+  }
+
+  private def updateAssertionStack(modelIndex : Int) : Unit = this.synchronized{
+    //println("locked updateAssertionStack by thread "+ Thread.currentThread.getId())
+    var newBit = true
+    for (el <- assertionStack) el match {
+      case AssertedFormula(id) =>
+        newBit = newBit && evalVectors(id)(modelIndex)
+      case AssertionFrame(oldVector) =>
+        if (oldVector != null)
+          setBit(oldVector, modelIndex, newBit)
+    }
+
+    if (currentEvalVector != null)
+      setBit(currentEvalVector, modelIndex, newBit)
+    //println("unlocked updateAssertionStack by thread "+ Thread.currentThread.getId())
+  }
+
+  def isActive : Boolean = this.synchronized {true}
+
+  def printStatistics : Unit = this.synchronized{
+    //println("locked printStatistics by thread "+ Thread.currentThread.getId())
+    println("Number of models in hasher:                            " + modelNum)
+    println("Number of hasher evals:                                " + evalNum)
+    println("Time for hasher eval:                                  " + evalTime)
+    //println("unlocked printStatistics by thread "+ Thread.currentThread.getId())
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  // API for checking satisfaction and implications
+
+  def push : Unit =
+    this.synchronized{ //println("locked push by thread "+ Thread.currentThread.getId())
+      assertionStack += AssertionFrame(currentEvalVector)
+      //println("unlocked push by thread "+ Thread.currentThread.getId())
+    }
+  def pop : Unit = this.synchronized{
+    //println("locked pop by thread "+ Thread.currentThread.getId())
+    var i = assertionStack.size - 1
+    while (i >= 0) {
+      assertionStack(i) match {
+        case AssertionFrame(vec) => {
+          currentEvalVector = vec
+          assertionStack reduceToSize i
+          return
+        }
+        case _ =>
+        // nothing
+      }
+      i = i - 1
+    }
+    //println("unlocked pop by thread "+ Thread.currentThread.getId())
+  }
+
+  def scope[A](comp : => A) : A = {
+    //println("locked scope by thread "+ Thread.currentThread.getId())
+    push
+    val ret = try {
+      comp
+    } finally {
+      pop
+    }
+    //println("unlocked scope by thread "+ Thread.currentThread.getId())
+    ret
+  }
+
+  def assertFormula(forId : Int) : Unit = this.synchronized{
+    //println("locked assertFormula by thread "+ Thread.currentThread.getId())
+    assertionStack += AssertedFormula(forId)
+    if (currentEvalVector == null)
+      currentEvalVector = evalVectors(forId)
+    else
+      currentEvalVector = currentEvalVector & evalVectors(forId)
+    //println("unlocked assertFormula by thread "+ Thread.currentThread.getId())
+  }
+
+  def isSat : Boolean =
+    this.synchronized{currentEvalVector == null || !currentEvalVector.isEmpty}
+
+  def mightBeImplied(forId : Int) : Boolean = this.synchronized{
+    //println("locked mightBeImplied by thread "+ Thread.currentThread.getId())
+    val ret= currentEvalVector != null &&
+      (currentEvalVector subsetOf evalVectors(forId))
+    //println("unlocked mightBeImplied by thread "+ Thread.currentThread.getId())
+    ret
+  }
+  private var currentEvalVector : MBitSet = null
+  private val assertionStack = new ArrayBuffer[AssertionStackElement]
+
+}
+
+/*
+class AssertionStackManager{
+  /*private abstract sealed class AssertionStackElement
+  private case class AssertedFormula(id : Int)
+    extends AssertionStackElement
+  private val evalVectors     = new ArrayBuffer[MBitSet]*/
+  import ParHasher._
+  private def updateAssertionStack(modelIndex : Int) : Unit = this.synchronized{
+    //println("locked updateAssertionStack by thread "+ Thread.currentThread.getId())
+    var newBit = true
+    for (el <- assertionStack) el match {
+      case AssertedFormula(id) =>
+        newBit = newBit && evalVectors(id)(modelIndex)
+      case AssertionFrame(oldVector) =>
+        if (oldVector != null)
+          setBit(oldVector, modelIndex, newBit)
+    }
+
+    if (currentEvalVector != null)
+      setBit(currentEvalVector, modelIndex, newBit)
+    //println("unlocked updateAssertionStack by thread "+ Thread.currentThread.getId())
+  }
+  def push : Unit =
+    this.synchronized{ //println("locked push by thread "+ Thread.currentThread.getId())
+      assertionStack += AssertionFrame(currentEvalVector)
+      //println("unlocked push by thread "+ Thread.currentThread.getId())
+    }
+  def pop : Unit = this.synchronized{
+    //println("locked pop by thread "+ Thread.currentThread.getId())
+    var i = assertionStack.size - 1
+    while (i >= 0) {
+      assertionStack(i) match {
+        case AssertionFrame(vec) => {
+          currentEvalVector = vec
+          assertionStack reduceToSize i
+          return
+        }
+        case _ =>
+        // nothing
+      }
+      i = i - 1
+    }
+    //println("unlocked pop by thread "+ Thread.currentThread.getId())
+  }
+  def scope[A](comp : => A) : A = {
+    //println("locked scope by thread "+ Thread.currentThread.getId())
+    push
+    val ret = try {
+      comp
+    } finally {
+      pop
+    }
+    //println("unlocked scope by thread "+ Thread.currentThread.getId())
+    ret
+  }
+  def assertFormula(forId : Int) : Unit = this.synchronized{
+    //println("locked assertFormula by thread "+ Thread.currentThread.getId())
+    assertionStack += AssertedFormula(forId)
+    if (currentEvalVector == null)
+      currentEvalVector = evalVectors(forId)
+    else
+      currentEvalVector = currentEvalVector & evalVectors(forId)
+    //println("unlocked assertFormula by thread "+ Thread.currentThread.getId())
+  }
+  private var currentEvalVector : MBitSet = null
+  private val assertionStack = new ArrayBuffer[AssertionStackElement]
+}*/
